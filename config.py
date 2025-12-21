@@ -26,7 +26,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")  # For Whisper transcription
 PRIMARY_MODEL = "gpt-4o"
 
 # Fast model for extraction tasks (OpenAI)
-EXTRACTION_MODEL = "gpt-4o-mini"
+EXTRACTION_MODEL = "gpt-4o"
 
 # ============================================================================
 # PATHS
