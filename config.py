@@ -22,14 +22,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")  # For Whisper transcription
 # LLM CONFIGURATION
 # ============================================================================
 
-# Primary model for coaching responses
-PRIMARY_MODEL = "claude-sonnet-4-20250514"
+# Primary model for coaching responses (OpenAI)
+PRIMARY_MODEL = "gpt-4o"
 
-# Fast model for extraction tasks
-EXTRACTION_MODEL = "claude-sonnet-4-20250514"
-
-# Cache TTL for prompt caching (1 hour recommended for multi-user)
-CACHE_TTL = "1h"
+# Fast model for extraction tasks (OpenAI)
+EXTRACTION_MODEL = "gpt-4o-mini"
 
 # ============================================================================
 # PATHS
