@@ -1,19 +1,18 @@
 """
 LLM Client Module
-Handles API calls with prompt caching for cost efficiency.
+Handles API calls to OpenAI.
 """
 
 import json
 import logging
 from typing import Optional, Dict, List, Any
 
-import anthropic
+from openai import OpenAI
 
 from config import (
-    ANTHROPIC_API_KEY,
+    OPENAI_API_KEY,
     PRIMARY_MODEL,
     EXTRACTION_MODEL,
-    CACHE_TTL,
     MAX_INPUT_TOKENS,
 )
 
@@ -22,17 +21,12 @@ logger = logging.getLogger(__name__)
 
 class LLMClient:
     """
-    Anthropic Claude client with prompt caching support.
-    
-    Caching strategy:
-    - System prompt + frameworks = cached (rarely changes)
-    - User context (state, facts) = cached per user session
-    - Recent messages = not cached (changes every turn)
+    OpenAI GPT client for generating responses.
     """
-    
+
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    
+        self.client = OpenAI(api_key=OPENAI_API_KEY)
+
     def _build_system_content(
         self,
         core_framework: str,
@@ -40,14 +34,11 @@ class LLMClient:
         instance_persona: str,
         instance_definition: dict,
         user_context: dict,
-        cache_static: bool = True
-    ) -> List[Dict]:
+    ) -> str:
         """
-        Build system content blocks with cache control.
+        Build system content as a single string.
         """
-        blocks = []
-        
-        # Static content (cached) - frameworks and persona
+        # Static content - frameworks and persona
         static_content = f"""
 {core_framework}
 
@@ -69,20 +60,8 @@ class LLMClient:
 
 {instance_persona}
 """
-        
-        if cache_static:
-            blocks.append({
-                "type": "text",
-                "text": static_content,
-                "cache_control": {"type": "ephemeral", "ttl": CACHE_TTL}
-            })
-        else:
-            blocks.append({
-                "type": "text",
-                "text": static_content
-            })
-        
-        # Dynamic content (not cached) - user context
+
+        # Dynamic content - user context
         if user_context:
             context_content = f"""
 ---
@@ -98,27 +77,24 @@ class LLMClient:
 **User Facts**:
 {json.dumps(user_context.get('facts', {}), indent=2)}
 """
-            blocks.append({
-                "type": "text",
-                "text": context_content
-            })
-        
-        return blocks
-    
+            return static_content + context_content
+
+        return static_content
+
     def _build_messages(self, recent_messages: List[Dict]) -> List[Dict]:
         """
         Build message array for API call.
         """
         messages = []
-        
+
         for msg in recent_messages:
             messages.append({
                 "role": msg['role'],
                 "content": msg['content']
             })
-        
+
         return messages
-    
+
     def generate_response(
         self,
         user_message: str,
@@ -132,7 +108,7 @@ class LLMClient:
     ) -> str:
         """
         Generate a response from the LLM.
-        
+
         Args:
             user_message: Current user message
             core_framework: Shared prediction error framework
@@ -142,49 +118,46 @@ class LLMClient:
             user_context: Current user state and facts
             recent_messages: Recent conversation history
             model: Model to use (defaults to PRIMARY_MODEL)
-        
+
         Returns:
             Generated response text
         """
         model = model or PRIMARY_MODEL
-        
-        # Build system content with caching
+
+        # Build system content
         system_content = self._build_system_content(
             core_framework=core_framework,
             security_rules=security_rules,
             instance_persona=instance_persona,
             instance_definition=instance_definition,
             user_context=user_context,
-            cache_static=True
         )
-        
-        # Build messages
-        messages = self._build_messages(recent_messages or [])
+
+        # Build messages with system prompt
+        messages = [{"role": "system", "content": system_content}]
+        messages.extend(self._build_messages(recent_messages or []))
         messages.append({"role": "user", "content": user_message})
-        
+
         try:
-            response = self.client.messages.create(
+            response = self.client.chat.completions.create(
                 model=model,
                 max_tokens=1024,
-                system=system_content,
                 messages=messages
             )
-            
-            # Log cache performance
-            if hasattr(response, 'usage'):
+
+            # Log usage
+            if hasattr(response, 'usage') and response.usage:
                 logger.info(
-                    f"Tokens - Input: {response.usage.input_tokens}, "
-                    f"Output: {response.usage.output_tokens}, "
-                    f"Cache read: {getattr(response.usage, 'cache_read_input_tokens', 0)}, "
-                    f"Cache write: {getattr(response.usage, 'cache_creation_input_tokens', 0)}"
+                    f"Tokens - Input: {response.usage.prompt_tokens}, "
+                    f"Output: {response.usage.completion_tokens}"
                 )
-            
-            return response.content[0].text
-            
+
+            return response.choices[0].message.content
+
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
             raise
-    
+
     def extract_structured(
         self,
         text: str,
@@ -194,12 +167,12 @@ class LLMClient:
         """
         Extract structured data from text using LLM.
         Uses faster model for efficiency.
-        
+
         Args:
             text: Text to extract from
             extraction_prompt: Instructions for extraction
             schema_description: Description of expected output schema
-        
+
         Returns:
             Extracted data as dict, or None if extraction failed
         """
@@ -214,32 +187,32 @@ Expected output schema:
 
 Respond with valid JSON only. No markdown, no explanation.
 """
-        
+
         try:
-            response = self.client.messages.create(
+            response = self.client.chat.completions.create(
                 model=EXTRACTION_MODEL,
                 max_tokens=512,
                 messages=[{"role": "user", "content": full_prompt}]
             )
-            
-            response_text = response.content[0].text.strip()
-            
+
+            response_text = response.choices[0].message.content.strip()
+
             # Clean potential markdown formatting
             if response_text.startswith("```"):
                 response_text = response_text.split("```")[1]
                 if response_text.startswith("json"):
                     response_text = response_text[4:]
                 response_text = response_text.strip()
-            
+
             return json.loads(response_text)
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"JSON parse error in extraction: {e}")
             return None
         except Exception as e:
             logger.error(f"Extraction error: {e}")
             return None
-    
+
     def classify_message(self, message: str, context: dict) -> Dict:
         """
         Classify the type of user message for routing.
@@ -277,7 +250,7 @@ Return JSON:
     "extracted_data": {{<any relevant extracted info or null>}}
 }}
 """
-        
+
         result = self.extract_structured(
             message,
             classification_prompt,

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Dict
 
 from core.llm import llm_client
+from config import PRIMARY_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +52,17 @@ class GateAgent:
             full_system = self.system_prompt
 
         try:
-            response = llm_client.client.messages.create(
-                model="claude-sonnet-4-20250514",
+            # Build messages with system prompt for OpenAI format
+            api_messages = [{"role": "system", "content": full_system}]
+            api_messages.extend(history)
+
+            response = llm_client.client.chat.completions.create(
+                model=PRIMARY_MODEL,
                 max_tokens=150,
-                system=full_system,
-                messages=history
+                messages=api_messages
             )
 
-            result = response.content[0].text.strip()
+            result = response.choices[0].message.content.strip()
             result = self._clean(result)
 
             logger.info(f"[AGENT] Response: '{result[:80]}...'")
